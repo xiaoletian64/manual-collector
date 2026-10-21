@@ -1,6 +1,6 @@
 # 说明书收集器｜保存到 GitHub 个人私有仓库
 
-> 🟡 进行中 · 更新：2026-10-21
+> ✅ 已完成 · 更新：2026-10-21
 
 ## 现状
 
@@ -13,8 +13,8 @@
 
 ## 待处理
 
-- [ ] 检查待提交内容，初始化并推送。
-- [ ] 验证远端私有属性及提交一致。
+- [x] 检查 173 个待提交文件，未检出常见密钥模式；初始化 main 并推送源码。
+- [x] GitHub API 读回 visibility=PRIVATE、owner=xiaoletian64；main 推送成功。
 
 ## 验证
 
@@ -24,4 +24,7 @@
 
 - 本机：/Users/yuezhang/Developer/mycode/说明书app
 - 稳定任务键：manual-collector-github-private
-- 滴答同步：待同步。
+- 滴答任务：6ad808fee4b04e4b6134dc6e；首次同步已 verified，完成状态待最终同步。
+- 仓库：https://github.com/xiaoletian64/manual-collector
+- 分支：main；初始源码提交：3e0fe00。
+- 下一步：需要继续开发时拉取 main；本次托管交付无剩余事项。
