@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">说明书</string>
+    <string name="tab_library">书库</string>
+    <string name="tab_scan">扫描</string>
+    <string name="tab_ask">问答</string>
+    <string name="tab_profile">我的</string>
+    <string name="search_hint">搜索说明书…</string>
+    <string name="empty_library">还没有说明书，点击 + 扫描吧</string>
+    <string name="scan_title">扫描说明书</string>
+    <string name="scan_auto">自动</string>
+    <string name="scan_manual">手动</string>
+    <string name="scan_multi">多页</string>
+    <string name="save">保存</string>
+    <string name="retake">补拍</string>
+    <string name="completeness_title">完整性评估</string>
+    <string name="ask_placeholder">输入你的问题…</string>
+    <string name="profile_title">个人设置</string>
+    <string name="cloud_backup">云备份</string>
+    <string name="baidu_cloud">百度网盘</string>
+    <string name="subscription">订阅管理</string>
+    <string name="about">关于</string>
+</resources>
