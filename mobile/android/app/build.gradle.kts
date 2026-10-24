@@ -1,3 +1,13 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+// 正式签名：存在 key.properties（CI/本地发版注入）时启用，否则回落 debug 签名（日常开发）。
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file(System.getenv("KEY_PROPERTIES") ?: "key.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
+}
+val hasReleaseKey = keystoreProperties.getProperty("storeFile") != null
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -36,9 +46,17 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.create("release") {
+                    keyAlias = keystoreProperties.getProperty("keyAlias")
+                    keyPassword = keystoreProperties.getProperty("keyPassword")
+                    storeFile = file(keystoreProperties.getProperty("storeFile"))
+                    storePassword = keystoreProperties.getProperty("storePassword")
+                }
+            } else {
+                // 日常开发用 debug 签名，发版必须走 CI（签名校验见 tool/verify_signing.sh）。
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

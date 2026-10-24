@@ -123,7 +123,8 @@ class UpdateService {
         const Duration(seconds: 20),
       );
       if (response.statusCode != 200) throw const HttpException('下载失败');
-      if (response.contentLength >= 0 && response.contentLength != release.size) {
+      if (response.contentLength >= 0 &&
+          response.contentLength != release.size) {
         throw const FormatException('安装包大小不符');
       }
       sink = partial.openWrite();

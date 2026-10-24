@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../models/manual.dart';
+
+/// 平台通道：拨号等原生小能力。
+const platform = MethodChannel('manual_collector/ui');
 
 class LibraryRepository {
   LibraryRepository(this.db, this.root);
@@ -23,11 +27,11 @@ class LibraryRepository {
     final db = await (factory ?? databaseFactory).openDatabase(
       p.join(root.path, 'library.db'),
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, version) async {
           await db.execute(
-            'CREATE TABLE manuals (id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL)',
+            'CREATE TABLE manuals (id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL, brand TEXT NOT NULL DEFAULT \'\', model TEXT NOT NULL DEFAULT \'\', purchased_at INTEGER, warranty_months INTEGER, phone TEXT NOT NULL DEFAULT \'\')',
           );
           await db.execute(
             "CREATE TABLE pages (id TEXT PRIMARY KEY, manual_id TEXT NOT NULL REFERENCES manuals(id) ON DELETE CASCADE, image TEXT NOT NULL, position INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '', lines TEXT NOT NULL DEFAULT '[]', ocr_status TEXT NOT NULL DEFAULT 'pending')",
@@ -35,6 +39,25 @@ class LibraryRepository {
           await db.execute(
             'CREATE INDEX pages_manual ON pages(manual_id, position)',
           );
+        },
+        onUpgrade: (db, from, to) async {
+          if (from < 2) {
+            await db.execute(
+              "ALTER TABLE manuals ADD COLUMN brand TEXT NOT NULL DEFAULT ''",
+            );
+            await db.execute(
+              "ALTER TABLE manuals ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            );
+            await db.execute(
+              'ALTER TABLE manuals ADD COLUMN purchased_at INTEGER',
+            );
+            await db.execute(
+              'ALTER TABLE manuals ADD COLUMN warranty_months INTEGER',
+            );
+            await db.execute(
+              "ALTER TABLE manuals ADD COLUMN phone TEXT NOT NULL DEFAULT ''",
+            );
+          }
         },
       ),
     );
@@ -48,9 +71,19 @@ class LibraryRepository {
     String query = '',
     String? category,
     String status = 'ready',
+    String sort = 'recent',
   }) async {
     // instr treats user input literally (including %, _ and quotes) and works with Chinese.
     final normalized = query.trim().toLowerCase();
+    final orderBy = switch (sort) {
+      // SQLite 没有现成的"剩余天数"，按(有保修且未过保)在前、截止日升序排；
+      // 无保修信息的排最后，再按创建时间兜底。
+      'warranty' =>
+        'ORDER BY CASE WHEN m.purchased_at IS NULL OR m.warranty_months IS NULL THEN 1 ELSE 0 END,'
+            ' m.purchased_at + m.warranty_months * 30.44 * 86400000 ASC, m.created_at DESC',
+      'name' => 'ORDER BY m.title COLLATE NOCASE ASC',
+      _ => 'ORDER BY m.created_at DESC',
+    };
     final rows = await db.rawQuery(
       '''
       SELECT m.*, (SELECT count(*) FROM pages WHERE manual_id=m.id) AS page_count,
@@ -60,7 +93,7 @@ class LibraryRepository {
       FROM manuals m WHERE status=? AND (? IS NULL OR category=?)
       AND (?='' OR instr(lower(title), ?) > 0 OR EXISTS
         (SELECT 1 FROM pages WHERE manual_id=m.id AND instr(lower(text), ?) > 0))
-      ORDER BY created_at DESC
+      $orderBy
     ''',
       [
         normalized,
@@ -73,6 +106,31 @@ class LibraryRepository {
       ],
     );
     return rows.map(Manual.fromRow).toList();
+  }
+
+  /// 我的页统计。
+  Future<Map<String, int>> stats() async {
+    final row = (await db.rawQuery(
+      '''
+      SELECT
+        (SELECT count(*) FROM manuals WHERE status='ready') AS manuals,
+        (SELECT count(*) FROM pages p JOIN manuals m ON p.manual_id=m.id WHERE m.status='ready') AS pages,
+        (SELECT count(*) FROM pages p JOIN manuals m ON p.manual_id=m.id WHERE m.status='ready' AND p.ocr_status='done' AND p.text!='') AS searchable,
+        (SELECT count(*) FROM manuals WHERE status='ready' AND purchased_at IS NOT NULL AND warranty_months IS NOT NULL
+           AND purchased_at + warranty_months * 30.44 * 86400000 > ?
+           AND purchased_at + warranty_months * 30.44 * 86400000 < ? + 90 * 86400000) AS warrantySoon
+    ''',
+      [
+        DateTime.now().millisecondsSinceEpoch,
+        DateTime.now().millisecondsSinceEpoch,
+      ],
+    )).single;
+    return {
+      'manuals': row['manuals'] as int? ?? 0,
+      'pages': row['pages'] as int? ?? 0,
+      'searchable': row['searchable'] as int? ?? 0,
+      'warrantySoon': row['warrantySoon'] as int? ?? 0,
+    };
   }
 
   Future<Manual> get(String id) async {
@@ -156,13 +214,52 @@ class LibraryRepository {
     }
   }
 
-  Future<void> updateInfo(String id, String title, String category) async {
+  Future<void> updateInfo(
+    String id,
+    String title,
+    String category, {
+    bool keepArchive = false,
+  }) async {
     await db.update(
       'manuals',
       {'title': title.trim(), 'category': category},
       where: 'id=?',
       whereArgs: [id],
     );
+  }
+
+  /// 产品档案完整保存（阅读器「修改名称和分类」走 updateInfo，不碰档案字段）。
+  Future<void> updateArchive({
+    required String id,
+    required String title,
+    required String category,
+    required String brand,
+    required String modelNo,
+    required String phone,
+    DateTime? purchasedAt,
+    int? warrantyMonths,
+  }) async {
+    await db.update(
+      'manuals',
+      {
+        'title': title.trim(),
+        'category': category,
+        'brand': brand,
+        'model': modelNo,
+        'phone': phone,
+        'purchased_at': purchasedAt?.millisecondsSinceEpoch,
+        'warranty_months': warrantyMonths,
+      },
+      where: 'id=?',
+      whereArgs: [id],
+    );
+  }
+
+  /// 拨打售后电话（无电话应用时静默失败）。
+  Future<void> dial(String phone) async {
+    try {
+      await platform.invokeMethod('dial', {'phone': phone});
+    } catch (_) {}
   }
 
   Future<void> publish(String id) async {

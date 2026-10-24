@@ -9,24 +9,84 @@ import '../services/library_repository.dart';
 import '../services/ocr_service.dart';
 import '../services/image_service.dart';
 import '../services/searchable_pdf.dart';
+import 'detail_screen.dart';
 
 class ScanScreen extends StatefulWidget {
-  const ScanScreen({super.key, required this.repository, required this.manual});
+  const ScanScreen({super.key, required this.repository, this.manual});
   final LibraryRepository repository;
-  final Manual manual;
+  final Manual? manual;
   @override
   State<ScanScreen> createState() => _ScanScreenState();
 }
 
 class _ScanScreenState extends State<ScanScreen> {
-  late final _title = TextEditingController(text: widget.manual.title);
-  late String _category = widget.manual.category;
+  late TextEditingController _title;
+  String _category = '未分类';
+  late Manual _manual;
   List<ScanPage> _pages = [];
   bool _busy = true;
   String _progress = '读取草稿…';
   final _picker = ImagePicker();
   final _ocr = OcrService();
   LibraryRepository get repo => widget.repository;
+
+  /// 三步指示：拍摄 → 整理 → 归档。
+  Widget _stepsHeader(ColorScheme colors) {
+    Widget step(String label, IconData icon, bool done, bool active) => Row(
+      children: [
+        Icon(
+          done ? Icons.check_circle : icon,
+          size: 18,
+          color: active || done
+              ? colors.primary
+              : colors.onSurfaceVariant.withValues(alpha: .5),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: active ? FontWeight.w700 : FontWeight.w400,
+            color: active || done
+                ? colors.primary
+                : colors.onSurfaceVariant.withValues(alpha: .7),
+          ),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+      child: Row(
+        children: [
+          step(
+            '拍摄',
+            Icons.photo_camera_outlined,
+            _pages.isNotEmpty,
+            _pages.isEmpty,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Icon(
+              Icons.chevron_right,
+              size: 16,
+              color: colors.outlineVariant,
+            ),
+          ),
+          step('整理', Icons.low_priority, false, _pages.isNotEmpty),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Icon(
+              Icons.chevron_right,
+              size: 16,
+              color: colors.outlineVariant,
+            ),
+          ),
+          step('归档', Icons.inventory_2_outlined, false, false),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +99,17 @@ class _ScanScreenState extends State<ScanScreen> {
     super.dispose();
   }
 
+  /// 无草稿进入时先建一份（FAB 直进扫描的路径）。
+  Future<void> _ensureManual() async {
+    if (widget.manual != null) {
+      _manual = widget.manual!;
+    } else {
+      _manual = await repo.createDraft();
+    }
+    _title = TextEditingController(text: _manual.title);
+    _category = _manual.category;
+  }
+
   void _notice(String message) {
     if (mounted) {
       ScaffoldMessenger.of(
@@ -49,6 +120,7 @@ class _ScanScreenState extends State<ScanScreen> {
 
   Future<void> _initialize() async {
     try {
+      await _ensureManual();
       await _refresh();
       if (Platform.isAndroid) {
         final recovered = await _picker.retrieveLostData();
@@ -69,14 +141,14 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Future<void> _refresh() async {
-    final pages = await repo.pages(widget.manual.id);
+    final pages = await repo.pages(_manual.id);
     if (mounted) {
       setState(() => _pages = pages);
     }
   }
 
   Future<void> _persistInfo() =>
-      repo.updateInfo(widget.manual.id, _title.text, _category);
+      repo.updateInfo(_manual.id, _title.text, _category);
   Future<void> _run(String label, Future<void> Function() action) async {
     if (_busy) {
       return;
@@ -146,7 +218,7 @@ class _ScanScreenState extends State<ScanScreen> {
           normalizeImage,
           await files[i].readAsBytes(),
         );
-        await repo.addPage(widget.manual.id, const Uuid().v4(), bytes);
+        await repo.addPage(_manual.id, const Uuid().v4(), bytes);
       } catch (_) {
         failed++;
       }
@@ -204,6 +276,33 @@ class _ScanScreenState extends State<ScanScreen> {
     }
     await _run('保存草稿…', () async {
       await _persistInfo();
+      // 按标题关键词建议分类，未分类时引导一键采纳。
+      if (mounted && _category == '未分类') {
+        final suggested = suggestCategory(_title.text.trim());
+        if (suggested != null) {
+          final adopt = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text('归入「$suggested」分类？'),
+              content: Text('根据名称「${_title.text.trim()}」推断。'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('保持未分类'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('就归这里'),
+                ),
+              ],
+            ),
+          );
+          if (adopt == true) {
+            _category = suggested;
+            await _persistInfo();
+          }
+        }
+      }
       await _recognize();
       final unavailable = _pages.where((p) => p.text.trim().isEmpty).length;
       if (unavailable > 0 && mounted) {
@@ -242,15 +341,50 @@ class _ScanScreenState extends State<ScanScreen> {
               .map((p) => PdfInputPage(repo.path(p.image), p.lines))
               .toList(),
           font: font.buffer.asUint8List(font.offsetInBytes, font.lengthInBytes),
-          output: repo.pdfPath(widget.manual.id),
+          output: repo.pdfPath(_manual.id),
         ),
       );
-      await repo.publish(widget.manual.id);
-      final manual = await repo.get(widget.manual.id);
+      await repo.publish(_manual.id);
+      final manual = await repo.get(_manual.id);
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pop(manual);
+      // 保存完成 → 引导补档案（型号/保修/售后电话）。
+      if (!manual.hasWarrantyInfo) {
+        if (!mounted) return;
+        final openArchive = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('已存入书柜 🎉'),
+            content: const Text('要补个产品档案吗？写入型号、购买日期和保修期，保修临期前书柜里会亮提醒。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('以后再说'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('补个档案'),
+              ),
+            ],
+          ),
+        );
+        if (openArchive == true) {
+          if (!mounted) return;
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ManualDetailScreen(
+                repository: repo,
+                manualId: manual.id,
+                autoEdit: true,
+              ),
+            ),
+          );
+        }
+      }
+      if (mounted) {
+        Navigator.of(context).pop(manual);
+      }
     });
   }
 
@@ -274,7 +408,7 @@ class _ScanScreenState extends State<ScanScreen> {
     );
     if (yes == true) {
       await _run('删除草稿…', () async {
-        await repo.delete(widget.manual.id);
+        await repo.delete(_manual.id);
         if (mounted) {
           Navigator.pop(context);
         }
@@ -292,6 +426,23 @@ class _ScanScreenState extends State<ScanScreen> {
           title: const Text('整理说明书'),
           actions: [
             IconButton(
+              tooltip: '产品档案',
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ManualDetailScreen(
+                            repository: repo,
+                            manualId: _manual.id,
+                          ),
+                        ),
+                      );
+                      await _refresh();
+                    },
+              icon: const Icon(Icons.badge_outlined),
+            ),
+            IconButton(
               tooltip: '删除草稿',
               onPressed: _busy ? null : _discard,
               icon: const Icon(Icons.delete_outline),
@@ -300,6 +451,7 @@ class _ScanScreenState extends State<ScanScreen> {
         ),
         body: Column(
           children: [
+            _stepsHeader(colors),
             if (_busy) ...[
               const LinearProgressIndicator(),
               Padding(
@@ -316,7 +468,7 @@ class _ScanScreenState extends State<ScanScreen> {
                     enabled: !_busy,
                     maxLength: 80,
                     decoration: const InputDecoration(
-                      labelText: '产品名称 / 型号',
+                      labelText: '产品名称 / 型号 *',
                       hintText: '例如：米家电饭煲 C1',
                     ),
                     onChanged: (_) => _persistInfo().catchError((Object _) {

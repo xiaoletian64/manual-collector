@@ -1,0 +1,85 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 更新说明（写入 OTA latest.json）
+        required: false
+        default: '界面升级：书架视图、产品档案与保修提醒、深色模式。'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      # 铁律：action 一律钉 SHA
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-java@c5195efecf7b3160055544e413abd548892e4929 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter (official action, pinned subosito/flutter-action)
+        uses: subosito/flutter-action@fd6571468a5f81b174b2ee134f1bcbcd018cc9a3 # v2.21.0
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Analyze (must be clean)
+        working-directory: mobile
+        run: flutter analyze --fatal-infos
+
+      - name: Prepare PDFium cache (curl, TLS verified)
+        working-directory: mobile
+        run: python3 tool/prepare_pdfium.py
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::Secret ANDROID_RELEASE_KEYSTORE_B64 未配置"
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+          printf 'storeFile=/tmp/release.keystore\nstorePassword=%s\nkeyAlias=notesvault\nkeyPassword=%s\n' \
+            "$KEYSTORE_PASS" "$KEYSTORE_PASS" > /tmp/key.properties
+
+      - name: Build release APK (arm64)
+        working-directory: mobile
+        env:
+          KEY_PROPERTIES: /tmp/key.properties
+        run: |
+          flutter build apk --release --target-platform android-arm64 \
+            --dart-define=FLUTTER_BUILD_MODE=Release
+        # signing handled via android/app/build.gradle.kts reading key.properties when present
+
+      - name: Collect artifact
+        run: |
+          mkdir -p out
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk out/manual-collector.apk
+          cd out
+          sha256sum manual-collector.apk | tee SHA256SUMS
+          ls -la
+
+      - name: Verify signing (must be family key b5aaac0e…)
+        run: |
+          bash ./mobile/tool/verify_signing.sh out/manual-collector.apk
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: manual-collector-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14

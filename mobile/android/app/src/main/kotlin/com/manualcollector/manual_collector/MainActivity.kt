@@ -24,6 +24,25 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manual_collector/ui")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "dial" -> {
+                        try {
+                            val phone = call.argument<String>("phone") ?: error("缺少号码")
+                            startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone")))
+                            result.success(null)
+                        } catch (error: Exception) {
+                            result.error("dial_failed", error.message ?: "无法打开拨号器", null)
+                        }
+                    }
+                    "dynamicColorAvailable" -> {
+                        // Material You 动态取色：Android 12+（S）
+                        result.success(Build.VERSION.SDK_INT >= 31)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manual_collector/update")
             .setMethodCallHandler { call, result ->
                 try {

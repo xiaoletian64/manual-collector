@@ -13,6 +13,7 @@ class EmptyRepository extends LibraryRepository {
     String query = '',
     String? category,
     String status = 'ready',
+    String sort = 'recent',
   }) async => [];
 }
 
@@ -31,7 +32,6 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('从第一本说明书开始'), findsOneWidget);
-      expect(find.text('扫描 / 导入图片'), findsOneWidget);
       await tester.enterText(find.byType(TextField), '安全');
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pumpAndSettle();

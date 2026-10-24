@@ -1,7 +1,7 @@
 name: manual_collector
 description: Offline paper manual archive with searchable PDFs.
 publish_to: none
-version: 0.1.2+3
+version: 0.2.0+4
 environment:
   sdk: '>=3.11.0 <4.0.0'
 dependencies:
@@ -19,6 +19,7 @@ dependencies:
   pdfrx: ^2.2.24
   uuid: ^4.5.2
   crypto: ^3.0.7
+  shared_preferences: ^2.3.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

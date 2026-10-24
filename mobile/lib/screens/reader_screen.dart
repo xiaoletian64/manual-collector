@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/manual.dart';
+import 'detail_screen.dart';
 import '../services/library_repository.dart';
 
 class ReaderScreen extends StatefulWidget {
@@ -34,6 +35,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int _page = 1;
   bool _ready = false, _sharing = false;
   String? _error;
+
+  Future<void> _openArchive() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ManualDetailScreen(
+          repository: widget.repository,
+          manualId: widget.manual.id,
+        ),
+      ),
+    );
+    if (mounted) {
+      final fresh = await widget.repository.get(widget.manual.id);
+      setState(() => _title = fresh.title);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -306,11 +323,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
           onSelected: (value) {
             if (value == 'edit') {
               _edit();
+            } else if (value == 'archive') {
+              _openArchive();
             } else {
               _delete();
             }
           },
           itemBuilder: (_) => const [
+            PopupMenuItem(value: 'archive', child: Text('产品档案')),
             PopupMenuItem(value: 'edit', child: Text('修改名称和分类')),
             PopupMenuItem(value: 'delete', child: Text('删除说明书')),
           ],
